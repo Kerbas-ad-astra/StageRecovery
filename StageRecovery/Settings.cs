@@ -17,8 +17,9 @@ namespace StageRecovery
         protected String filePath = KSPUtil.ApplicationRootPath + "GameData/StageRecovery/Config.txt";
         //The persistent values are saved to the file and read in by them. They are saved as Name = Value and separated by new lines
         [Persistent] public float RecoveryModifier, DeadlyReentryMaxVelocity, CutoffVelocity, LowCut, HighCut, MinTWR, DistanceOverride;
-        [Persistent] public bool SREnabled, RecoverScience, RecoverKerbals, ShowFailureMessages, ShowSuccessMessages, FlatRateModel, PoweredRecovery, RecoverClamps, UseUpgrades, UseToolbarMod;
+        [Persistent] public bool SREnabled, RecoverScience, RecoverKerbals, ShowFailureMessages, ShowSuccessMessages, FlatRateModel, PoweredRecovery, RecoverClamps, UseUpgrades, UseToolbarMod, HideButton;
 
+        public bool Clicked = false;
         public List<RecoveryItem> RecoveredStages, DestroyedStages;
         public IgnoreList BlackList = new IgnoreList();
 
@@ -43,6 +44,8 @@ namespace StageRecovery
             UseUpgrades = true;
             UseToolbarMod = true;
             DistanceOverride = -1.0f;
+
+            HideButton = false;
 
             RecoveredStages = new List<RecoveryItem>();
             DestroyedStages = new List<RecoveryItem>();
@@ -115,6 +118,8 @@ namespace StageRecovery
     {
         public FlightGUI flightGUI = new FlightGUI();
 
+        public EditorGUI editorGUI = new EditorGUI();
+
         //The window is only shown when this is true
         private bool showWindow, showBlacklist;
 
@@ -142,14 +147,18 @@ namespace StageRecovery
         {
             if (ToolbarManager.ToolbarAvailable && Settings.instance.UseToolbarMod)
                 return;
+
+            if (Settings.instance.HideButton) //If told to hide the button, then don't show the button. Blizzy's can do this automatically.
+                return;
+
             bool vis;
             if (ApplicationLauncher.Ready && (SRButtonStock == null || !ApplicationLauncher.Instance.Contains(SRButtonStock, out vis))) //Add Stock button
             {
                 SRButtonStock = ApplicationLauncher.Instance.AddModApplication(
                     ShowWindow,
                     hideAll,
-                    DummyVoid,
-                    DummyVoid,
+                    OnHoverOn,
+                    OnHoverOff,
                     DummyVoid,
                     DummyVoid,
                     (ApplicationLauncher.AppScenes.SPACECENTER | ApplicationLauncher.AppScenes.FLIGHT | ApplicationLauncher.AppScenes.SPH | ApplicationLauncher.AppScenes.VAB | ApplicationLauncher.AppScenes.MAPVIEW),
@@ -175,15 +184,30 @@ namespace StageRecovery
         //This method is used when the toolbar button is clicked. It alternates between showing the window and hiding it.
         public void onClick()
         {
-            if (showWindow || flightGUI.showFlightGUI)
+            if (Settings.instance.Clicked && (showWindow || flightGUI.showFlightGUI || editorGUI.showEditorGUI))
                 hideAll();
             else
                 ShowWindow();
         }
 
+        //When the button is hovered over, show the flight GUI if in flight
+        public void OnHoverOn()
+        {
+            if (HighLogic.LoadedSceneIsFlight)
+                flightGUI.showFlightGUI = true;
+        }
+
+        //When the button is no longer hovered over, hide the flight GUI if it wasn't clicked
+        public void OnHoverOff()
+        {
+            if (HighLogic.LoadedSceneIsFlight && !Settings.instance.Clicked)
+                flightGUI.showFlightGUI = false;
+        }
+
         //This shows the correct window depending on the current scene
         public void ShowWindow()
         {
+            Settings.instance.Clicked = true;
             if (HighLogic.LoadedSceneIsFlight)
                 flightGUI.showFlightGUI = true;
             else if (HighLogic.LoadedScene == GameScenes.SPACECENTER)
@@ -198,6 +222,7 @@ namespace StageRecovery
             if (showWindow) mainWindowRect = GUILayout.Window(8940, mainWindowRect, DrawSettingsGUI, "StageRecovery", HighLogic.Skin.window);
             if (flightGUI.showFlightGUI) flightGUI.flightWindowRect = GUILayout.Window(8940, flightGUI.flightWindowRect, flightGUI.DrawFlightGUI, "StageRecovery", HighLogic.Skin.window);
             if (showBlacklist) blacklistRect = GUILayout.Window(8941, blacklistRect, DrawBlacklistGUI, "Ignore List", HighLogic.Skin.window);
+            if (editorGUI.showEditorGUI) editorGUI.EditorGUIRect = GUILayout.Window(8940, editorGUI.EditorGUIRect, editorGUI.DrawEditorGUI, "StageRecovery", HighLogic.Skin.window);
         }
 
         //More drawing window stuff. I only half understand this. It just works.
@@ -206,6 +231,7 @@ namespace StageRecovery
             if (showWindow) DrawSettingsGUI(windowID);
             if (flightGUI.showFlightGUI) flightGUI.DrawFlightGUI(windowID);
             if (showBlacklist) DrawBlacklistGUI(windowID);
+            if (editorGUI.showEditorGUI) editorGUI.DrawEditorGUI(windowID);
         }
 
         //Hide all the windows. We only have one so this isn't super helpful, but alas.
@@ -213,7 +239,10 @@ namespace StageRecovery
         {
             showWindow = false;
             flightGUI.showFlightGUI = false;
+            editorGUI.showEditorGUI = false;
             showBlacklist = false;
+            Settings.instance.Clicked = false;
+            editorGUI.UnHighlightAll();
         }
 
         //Resets the windows. Hides them and resets the Rect object. Not really needed, but it's here
@@ -222,6 +251,7 @@ namespace StageRecovery
             hideAll();
             mainWindowRect = new Rect(0, 0, windowWidth, 1);
             flightGUI.flightWindowRect = new Rect((Screen.width - 768) / 2, (Screen.height - 540) / 2, 768, 540);
+            editorGUI.EditorGUIRect = new Rect(Screen.width / 3, Screen.height / 3, 200, 1);
             blacklistRect = new Rect(0, 0, 360, 1);
         }
 
@@ -401,156 +431,11 @@ namespace StageRecovery
 
         public void EditorCalc()
         {
-            float Vt = DetermineVtEditor(false);
-            StringBuilder msg = new StringBuilder();
-            bool recovered = false;
-            if (Settings.instance.FlatRateModel)
-                recovered = Vt < Settings.instance.CutoffVelocity;
-            else
-                recovered = Vt < Settings.instance.HighCut;
+            editorGUI.BreakShipIntoStages();
+            editorGUI.HighlightAll();
+            editorGUI.showEditorGUI = true;
+            editorGUI.EditorGUIRect.height = 1; //reset the height
 
-            msg.AppendLine("-- Current Fuel Values --");
-            if (recovered) msg.AppendLine("Status: Recovered");
-            else msg.AppendLine("Status: Destroyed");
-
-            float recoveryPercent = 0;
-            if (recovered && Settings.instance.FlatRateModel) recoveryPercent = 1;
-            else if (recovered && !Settings.instance.FlatRateModel) recoveryPercent = RecoveryItem.GetVariableRecoveryValue(Vt);
-
-            msg.AppendLine("Terminal velocity: " + Math.Round(Vt, 1) + " m/s");
-            msg.AppendLine("Percent recovered: " + Math.Round(100 * recoveryPercent, 2) + "%");
-
-            float fullVt = Vt;
-            Vt = DetermineVtEditor(true);
-            if (fullVt != Vt)
-            {
-                msg.AppendLine("\n-- Empty Values --");
-                recovered = false;
-                if (Settings.instance.FlatRateModel)
-                    recovered = Vt < Settings.instance.CutoffVelocity;
-                else
-                    recovered = Vt < Settings.instance.HighCut;
-
-                if (recovered) msg.AppendLine("Status: Recovered");
-                else msg.AppendLine("Status: Destroyed");
-
-                recoveryPercent = 0;
-                if (recovered && Settings.instance.FlatRateModel) recoveryPercent = 1;
-                else if (recovered && !Settings.instance.FlatRateModel) recoveryPercent = RecoveryItem.GetVariableRecoveryValue(Vt);
-
-                msg.AppendLine("Terminal velocity: " + Math.Round(Vt, 1) + " m/s");
-                msg.AppendLine("Percent recovered: " + Math.Round(100 * recoveryPercent, 2) + "%");
-            }
-            MessageSystemButton.MessageButtonColor color = recovered ? MessageSystemButton.MessageButtonColor.BLUE : MessageSystemButton.MessageButtonColor.RED;
-            MessageSystem.Message m = new MessageSystem.Message("StageRecovery Editor Help", msg.ToString(), color, MessageSystemButton.ButtonIcons.MESSAGE);
-            MessageSystem.Instance.AddMessage(m);
-            
-            if (SRButtonStock != null) SRButtonStock.SetFalse();
-        }
-
-        public float DetermineVtEditor(bool empty)
-        {
-            float Vt = float.MaxValue;
-            List<Part> parts = EditorLogic.fetch.ship.Parts;
-            bool realChuteInUse = false;
-            float totalMass = 0;
-            //float dragCoeff = 0;
-            double totalParachuteArea = 0;
-            float RCParameter = 0;
-            foreach (Part part in parts)
-            {
-                totalMass += part.mass;
-                if (!empty) totalMass += part.GetResourceMass();
-              /*  bool hasRealChute = part.Modules.Contains("RealChuteModule");
-                bool hasChute = part.Modules.Contains("ModuleParachute");
-                if (hasRealChute) realChuteInUse = true;*/
-
-                if (part.Modules.Contains("RealChuteModule"))
-                {
-                    PartModule realChute = part.Modules["RealChuteModule"];
-                    ConfigNode rcNode = new ConfigNode();
-                    realChute.Save(rcNode);
-
-                    //This is where the Reflection starts. We need to access the material library that RealChute has, so we first grab it's Type
-                    Type matLibraryType = AssemblyLoader.loadedAssemblies
-                        .SelectMany(a => a.assembly.GetExportedTypes())
-                        .SingleOrDefault(t => t.FullName == "RealChute.Libraries.MaterialsLibrary");
-
-                    //We make a list of ConfigNodes containing the parachutes (usually 1, but now there can be any number of them)
-                    //We get that from the PPMS 
-                    ConfigNode[] parachutes = rcNode.GetNodes("PARACHUTE");
-                    //We then act on each individual parachute in the module
-                    foreach (ConfigNode chute in parachutes)
-                    {
-                        //First off, the diameter of the parachute. From that we can (later) determine the Vt, assuming a circular chute
-                        float diameter = float.Parse(chute.GetValue("deployedDiameter"));
-                        //The name of the material the chute is made of. We need this to get the actual material object and then the drag coefficient
-                        string mat = chute.GetValue("material");
-                        //This grabs the method that RealChute uses to get the material. We will invoke that with the name of the material from before.
-                        System.Reflection.MethodInfo matMethod = matLibraryType.GetMethod("GetMaterial", new Type[] { mat.GetType() });
-                        //In order to invoke the method, we need to grab the active instance of the material library
-                        object MatLibraryInstance = matLibraryType.GetProperty("instance").GetValue(null, null);
-                        //With the library instance we can invoke the GetMaterial method (passing the name of the material as a parameter) to receive an object that is the material
-                        object materialObject = matMethod.Invoke(MatLibraryInstance, new object[] { mat });
-                        //With that material object we can extract the dragCoefficient using the helper function above.
-                        float dragC = (float)StageRecovery.GetMemberInfoValue(materialObject.GetType().GetMember("dragCoefficient")[0], materialObject);
-                        //Now we calculate the RCParameter. Simple addition of this doesn't result in perfect results for Vt with parachutes with different diameter or drag coefficients
-                        //But it works perfectly for mutiple identical parachutes (the normal case)
-                        RCParameter += dragC * (float)Math.Pow(diameter, 2);
-                    }
-                    realChuteInUse = true;
-                }
-                else if (part.Modules.Contains("RealChuteFAR")) //RealChute Lite for FAR
-                {
-                    PartModule realChute = part.Modules["RealChuteFAR"];
-                    float diameter = (float)realChute.Fields.GetValue("deployedDiameter");
-                    // = float.Parse(realChute.moduleValues.GetValue("deployedDiameter"));
-                    float dragC = 1.0f; //float.Parse(realChute.moduleValues.GetValue("staticCd"));
-                    RCParameter += dragC * (float)Math.Pow(diameter, 2);
-
-                    realChuteInUse = true;
-                }
-                else if (!realChuteInUse && part.Modules.Contains("ModuleParachute"))
-                {
-                    ModuleParachute mp = (ModuleParachute)part.Modules["ModuleParachute"];
-                    //dragCoeff += part.mass * mp.fullyDeployedDrag;
-                    totalParachuteArea += mp.areaDeployed;
-                }
-               /* else
-                {
-                    //dragCoeff += part.mass * part.maximum_drag;
-                    totalParachuteArea += 0.1;
-                }*/
-            }
-            /*if (!realChuteInUse)
-            {
-                //This all follows from the formulas on the KSP wiki under the atmosphere page. http://wiki.kerbalspaceprogram.com/wiki/Atmosphere
-                //Divide the current value of the dragCoeff by the total mass. Now we have the actual drag coefficient for the vessel
-                //dragCoeff = dragCoeff / (totalMass);
-                //Calculate Vt by what the wiki says
-                //Vt = (float)(Math.Sqrt((250 * 6.674E-11 * 5.2915793E22) / (3.6E11 * 1.22309485 * dragCoeff)));
-                //float adjuster = 0;
-                //ConfigNode aNode = ConfigNode.Load(KSPUtil.ApplicationRootPath + "GameData/StageRecovery/adjust.txt");
-                //adjuster = float.Parse(aNode.GetValue("adjuster"));
-                //Vt = (float)Math.Sqrt((8000 * totalMass * 9.8) / (1.223 * adjuster * totalParachuteArea));
-               // Debug.Log(totalParachuteArea);
-                Vt = (float)(63*Math.Pow(totalMass / totalParachuteArea, 0.4));
-            }*/
-            //Otherwise we're using RealChutes and we have a bit different of a calculation
-            if (realChuteInUse)
-            {
-                //This is according to the formulas used by Stupid_Chris in the Real Chute drag calculator program included with Real Chute. Source: https://github.com/StupidChris/RealChute/blob/master/Drag%20Calculator/RealChute%20drag%20calculator/RCDragCalc.cs
-                Vt = (float)Math.Sqrt(((8000 * totalMass * 9.8) / (1.223 * Math.PI * RCParameter)));
-            }
-            else if (totalParachuteArea != 0)
-            {
-                Vt = (float)(63 * Math.Pow(totalMass / totalParachuteArea, 0.4));
-            }
-            else
-            {
-                Vt = 200;
-            }
-            return Vt;
         }
 
     }

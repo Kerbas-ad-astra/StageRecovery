@@ -25,7 +25,8 @@ namespace StageRecovery
         public float Vt = 0f;
         public List<string> ScienceExperiments = new List<string>();
         public float ScienceRecovered = 0;
-        public List<string> KerbalsOnboard = new List<string>();
+        //public List<string> KerbalsOnboard = new List<string>();
+        public List<ProtoCrewMember> KerbalsOnboard = new List<ProtoCrewMember>();
         public Dictionary<string, int> PartsRecovered = new Dictionary<string, int>();
         public Dictionary<string, float> Costs = new Dictionary<string, float>();
         public float FundsOriginal = 0, FundsReturned = 0, DryReturns = 0, FuelReturns = 0;
@@ -44,6 +45,11 @@ namespace StageRecovery
                     p.Pack();
             //Get the name
             StageName = vessel.vesselName;
+        }
+
+        public bool Process()
+        {
+            Debug.Log("[SR] Altitude: " + vessel.altitude);
             //Determine what the terminal velocity should be
             Vt = DetermineTerminalVelocity();
             //Try to perform a powered landing
@@ -63,6 +69,8 @@ namespace StageRecovery
             //Recover Kerbals if we're allowed
             //if (recovered && Settings.instance.RecoverKerbals)
             KerbalsOnboard = RecoverKerbals();
+
+            return recovered;
         }
 
         public static double GetParachuteDragFromPart(AvailablePart parachute)
@@ -122,30 +130,8 @@ namespace StageRecovery
                     totalMass += p.mass;
                     //Add resource masses
                     totalMass += GetResourceMass(p.resources);
-                    //Assume the part isn't a parachute until proven a parachute
-                   // bool isParachute = false;
-                    //For instance, by having the ModuleParachute module
-                    if (!realChuteInUse && ModuleNames.Contains("ModuleParachute"))
-                    {
-                        //Find the ModuleParachute (find it in the module list by checking for a module with the name ModuleParachute)
-                        ProtoPartModuleSnapshot ppms = p.modules.First(mod => mod.moduleName == "ModuleParachute");
-                        if (ppms.moduleRef != null)
-                        {
-                            ModuleParachute mp = (ModuleParachute)ppms.moduleRef;
-                            mp.Load(ppms.moduleValues);
-                            totalParachuteArea += mp.areaDeployed;
-                        }
-                        else
-                        {
-                            totalParachuteArea += GetParachuteDragFromPart(p.partInfo);
-                        }
-                        //Add the part mass times the fully deployed drag (typically 500) to the dragCoeff variable (you'll see why later)
-                       // dragCoeff += p.mass * drag;
-                        //This is most definitely a parachute part
-                     //   isParachute = true;
-                    }
-                    //If the part has the RealChuteModule, we have to do some tricks to access it
-                    else if (ModuleNames.Contains("RealChuteModule"))
+
+                    if (ModuleNames.Contains("RealChuteModule"))
                     {
                         //First off, get the PPMS since we'll need that
                         ProtoPartModuleSnapshot realChute = p.modules.First(mod => mod.moduleName == "RealChuteModule");
@@ -181,12 +167,11 @@ namespace StageRecovery
 
                             }
                             //This is a parachute also
-                           // isParachute = true;
+                            // isParachute = true;
                             //It's existence means that RealChute is installed and in use on the craft (you could have it installed and use stock chutes, so we only check if it's on the craft)
                             realChuteInUse = true;
                         }
                     }
-
                     else if (ModuleNames.Contains("RealChuteFAR")) //RealChute Lite for FAR
                     {
                         ProtoPartModuleSnapshot realChute = p.modules.First(mod => mod.moduleName == "RealChuteFAR");
@@ -196,6 +181,39 @@ namespace StageRecovery
 
                         realChuteInUse = true;
                     }
+                    else if (!realChuteInUse && ModuleNames.Contains("ModuleParachute"))
+                    {
+                        double scale = 1.0;
+                        //check for Tweakscale and modify the area appropriately
+                        if (ModuleNames.Contains("TweakScale"))
+                        {
+                            ConfigNode tweakScale = p.modules.Find(m => m.moduleName == "TweakScale").moduleValues;
+                            double currentScale = 100, defaultScale = 100;
+                            double.TryParse(tweakScale.GetValue("currentScale"), out currentScale);
+                            double.TryParse(tweakScale.GetValue("defaultScale"), out defaultScale);
+                            scale = currentScale / defaultScale;
+                        }
+
+                        //Find the ModuleParachute (find it in the module list by checking for a module with the name ModuleParachute)
+                        ProtoPartModuleSnapshot ppms = p.modules.First(mod => mod.moduleName == "ModuleParachute");
+                        if (ppms.moduleRef != null)
+                        {
+                            ModuleParachute mp = (ModuleParachute)ppms.moduleRef;
+                            mp.Load(ppms.moduleValues);
+                            //totalParachuteArea += mp.areaDeployed;
+                            totalParachuteArea += mp.areaDeployed * Math.Pow(scale, 2);
+                        }
+                        else
+                        {
+                            totalParachuteArea += GetParachuteDragFromPart(p.partInfo) * Math.Pow(scale, 2);
+                        }
+                        //Add the part mass times the fully deployed drag (typically 500) to the dragCoeff variable (you'll see why later)
+                       // dragCoeff += p.mass * drag;
+                        //This is most definitely a parachute part
+                     //   isParachute = true;
+                    }
+                    //If the part has the RealChuteModule, we have to do some tricks to access it
+                    
                     //If the part isn't a parachute (no ModuleParachute or RealChuteModule)
                    // if (!isParachute)
                    // {
@@ -217,9 +235,10 @@ namespace StageRecovery
             if (realChuteInUse)
             {
             	//This is according to the formulas used by Stupid_Chris in the Real Chute drag calculator program included with Real Chute. Source: https://github.com/StupidChris/RealChute/blob/master/Drag%20Calculator/RealChute%20drag%20calculator/RCDragCalc.cs
-            	v = (float)Math.Sqrt((8000 * totalMass * 9.8) / (1.223 * Math.PI * RCParameter));
+            	//v = (float)Math.Sqrt((8000 * totalMass * 9.8) / (1.223 * Math.PI * RCParameter));
+                v = (float)StageRecovery.VelocityEstimate(totalMass, RCParameter, true);
             }
-            else if (totalParachuteArea != 0)
+            else
             {
 	            //This all follows from the formulas on the KSP wiki under the atmosphere page. http://wiki.kerbalspaceprogram.com/wiki/Atmosphere
 	            //Divide the current value of the dragCoeff by the total mass. Now we have the actual drag coefficient for the vessel
@@ -227,11 +246,8 @@ namespace StageRecovery
 	            //Calculate Vt by what the wiki says
 	            //v = (float)(Math.Sqrt((250 * 6.674E-11 * 5.2915793E22) / (3.6E11 * 1.22309485 * dragCoeff)));
 	
-	            v = (float)(63 * Math.Pow(totalMass / totalParachuteArea, 0.4));
-            }
-            else
-            {
-                v = 200.0f;
+	            //v = (float)(63 * Math.Pow(totalMass / totalParachuteArea, 0.4));
+                v = (float)StageRecovery.VelocityEstimate(totalMass, totalParachuteArea, false);
             }
             ParachuteModule = realChuteInUse ? "RealChute" : "Stock";
             Debug.Log("[SR] Vt: " + v);
@@ -280,11 +296,21 @@ namespace StageRecovery
             Dictionary<string, float> propsUsed = new Dictionary<string, float>();
             //The stage must be controlled to be landed this way
             bool stageControllable = vessel.protoVessel.wasControllable;
+            if (!stageControllable && KerbalsOnboard.Count > 0)
+            {
+                if (!Settings.instance.UseUpgrades)
+                    stageControllable = true;
+                else
+                {
+                    if (KerbalsOnboard.Exists(pcm => pcm.experienceTrait.Title == "Pilot"))
+                        stageControllable = true;
+                }
+            }
             try
             {
                 if (stageControllable && Settings.instance.UseUpgrades)
                 {
-                    stageControllable = vessel.GetVesselCrew().Find(c => c.experienceTrait.Title == "Pilot") != null;
+                    stageControllable = vessel.GetVesselCrew().Exists(c => c.experienceTrait.Title == "Pilot") || KerbalsOnboard.Exists(pcm => pcm.experienceTrait.Title == "Pilot");
                     if (stageControllable)
                         Debug.Log("[SR] Found a kerbal pilot!");
                     else
@@ -653,6 +679,16 @@ namespace StageRecovery
             {
                 //Assume uncontrolled until proven controlled
                 bool stageControllable = vessel.protoVessel.wasControllable;
+                if (!stageControllable && KerbalsOnboard.Count > 0)
+                {
+                    if (!Settings.instance.UseUpgrades)
+                        stageControllable = true;
+                    else
+                    {
+                        if (KerbalsOnboard.Exists(pcm => pcm.trait == "Pilot"))
+                            stageControllable = true;
+                    }
+                }
                 //Cycle through all of the parts on the ship (well, ProtoPartSnaphsots)
                 /*foreach (ProtoPartSnapshot pps in vessel.protoVessel.protoPartSnapshots)
                 {
@@ -671,7 +707,7 @@ namespace StageRecovery
             }
             //If we're not using Flat Rate (thus using Variable Rate) then we have to do a bit more work to get the SpeedPercent
             else
-                SpeedPercent = GetVariableRecoveryValue(Vt);
+                SpeedPercent = (float)GetVariableRecoveryValue(Vt);
 
             //Calculate the distance from KSC in meters
             KSCDistance = (float)SpaceCenter.Instance.GreatCircleDistance(SpaceCenter.Instance.cb.GetRelSurfaceNVector(vessel.latitude, vessel.longitude));
@@ -692,8 +728,8 @@ namespace StageRecovery
             //Combine the modifier from the velocity and the modifier from distance together
             RecoveryPercent = SpeedPercent * DistancePercent;
 
-            Debug.Log("[SR] Vessel Lat/Lon: " + vessel.latitude + "/" + vessel.longitude);
-            Debug.Log("[SR] KSC Lat/Lon: " + SpaceCenter.Instance.Latitude + "/" + SpaceCenter.Instance.Longitude);
+            //Debug.Log("[SR] Vessel Lat/Lon: " + vessel.latitude + "/" + vessel.longitude);
+            //Debug.Log("[SR] KSC Lat/Lon: " + SpaceCenter.Instance.Latitude + "/" + SpaceCenter.Instance.Longitude);
             Debug.Log("[SR] Distance: "+KSCDistance);
         }
 
@@ -785,74 +821,123 @@ namespace StageRecovery
         }
 
         //This recovers Kerbals on the Stage, returning the list of their names
-        private List<String> RecoverKerbals()
+        private List<ProtoCrewMember> RecoverKerbals()
         { 
-            //Currently causing Kerbals to lose exp!
-            List<String> kerbals = new List<string>();
-            //If there's no crew, why look?
-            if (vessel.protoVessel.GetVesselCrew().Count > 0)
+            List<ProtoCrewMember> kerbals = new List<ProtoCrewMember>();
+
+            if (KerbalsOnboard.Count > 0)
+            {
+                //We've already removed the Kerbals, now we recover them
+                kerbals = KerbalsOnboard;
+                Debug.Log("[SR] Found pre-recovered Kerbals");
+            }
+            else
             {
                 //Recover the kerbals and get their names
                 foreach (ProtoCrewMember pcm in vessel.protoVessel.GetVesselCrew())
                 {
                     //Yeah, that's all it takes to recover a kerbal. Set them to Available from Assigned
-                    if (recovered && Settings.instance.RecoverKerbals)
-                    {
-                        pcm.rosterStatus = ProtoCrewMember.RosterStatus.Available;
-                        //pcm.experienceTrait.Config.
-                        //Way to go Squad, you now kill Kerbals TWICE instead of only once.
-                        bool TwoDeathEntries = (pcm.careerLog.Entries.Count > 1 && pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 1].type == "Die" 
-                            && pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 2].type == "Die");
-                        if (TwoDeathEntries)
+                    /*  if (recovered && Settings.instance.RecoverKerbals)
                         {
-                            Debug.Log("[SR] Squad has decided to kill " + pcm.name + " not once, but TWICE!");
-                            FlightLog.Entry deathEntry0 = pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 1];//pcm.careerLog.Entries.Find(e => e.type == "Die");
-                            if (deathEntry0 != null && deathEntry0.type == "Die")
-                            {
-                                pcm.careerLog.Entries.Remove(deathEntry0);
-                            }
-                            FlightLog.Entry deathEntry = pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 1];
-                            if (deathEntry != null && deathEntry.type == "Die")
-                            {
-                                Debug.Log("[SR] Recovered kerbal registered as dead. Attempting to repair.");
-                                int flightNum = deathEntry.flight;
-                                pcm.careerLog.Entries.Remove(deathEntry);
-                                FlightLog.Entry landing = new FlightLog.Entry(flightNum, FlightLog.EntryType.Land, "Kerbin");
-                                FlightLog.Entry recovery = new FlightLog.Entry(flightNum, FlightLog.EntryType.Recover);
-                                pcm.careerLog.AddEntry(landing);
-                                pcm.careerLog.AddEntry(recovery);
-                            }
-                        }
-                        else if (pcm.careerLog.Entries.Count > 0 && pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 1].type == "Die")
-                        {
-                            Debug.Log("[SR] Squad has been gracious and has only killed " + pcm.name + " once, instead of twice.");
-                            FlightLog.Entry deathEntry = pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 1];
-                            if (deathEntry != null && deathEntry.type == "Die")
-                            {
-                                Debug.Log("[SR] Recovered kerbal registered as dead. Attempting to repair.");
-                                int flightNum = deathEntry.flight;
-                                pcm.careerLog.Entries.Remove(deathEntry);
-                                FlightLog.Entry landing = new FlightLog.Entry(flightNum, FlightLog.EntryType.Land, "Kerbin");
-                                FlightLog.Entry recovery = new FlightLog.Entry(flightNum, FlightLog.EntryType.Recover);
-                                pcm.careerLog.AddEntry(landing);
-                                pcm.careerLog.AddEntry(recovery);
-                            }
-                        }
-                        else
-                        {
-                            Debug.Log("[SR] No death entry added, but we'll add a successful recovery anyway.");
-                            pcm.flightLog.AddEntry(FlightLog.EntryType.Land, "Kerbin");
-                            pcm.flightLog.AddEntry(FlightLog.EntryType.Recover);
-                            pcm.ArchiveFlightLog();
-                        }
-                    }
-                    kerbals.Add(pcm.name);
+                            pcm.rosterStatus = ProtoCrewMember.RosterStatus.Available;
+                            //remove the Kerbal from the vessel
+                            ProtoPartSnapshot crewedPart = vessel.protoVessel.protoPartSnapshots.Find(p => p.HasCrew(pcm.name));
+                            if (crewedPart != null)
+                                crewedPart.RemoveCrew(pcm.name);
+                            else
+                                Debug.Log("[SR] Can't find the part housing " + pcm.name);
+                        }*/
+                    kerbals.Add(pcm);
                 }
             }
+
+            if (kerbals.Count > 0 && Settings.instance.RecoverKerbals && recovered)
+            {
+                foreach (ProtoCrewMember pcm in kerbals)
+                {
+                    Debug.Log("[SR] Recovering " + pcm.name);
+                    pcm.rosterStatus = ProtoCrewMember.RosterStatus.Available;
+                    //Way to go Squad, you now kill Kerbals TWICE instead of only once.
+                    bool TwoDeathEntries = (pcm.careerLog.Entries.Count > 1 && pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 1].type == "Die"
+                        && pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 2].type == "Die");
+                    if (TwoDeathEntries)
+                    {
+                        Debug.Log("[SR] Squad has decided to kill " + pcm.name + " not once, but TWICE!");
+                        FlightLog.Entry deathEntry0 = pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 1];//pcm.careerLog.Entries.Find(e => e.type == "Die");
+                        if (deathEntry0 != null && deathEntry0.type == "Die")
+                        {
+                            pcm.careerLog.Entries.Remove(deathEntry0);
+                        }
+                        FlightLog.Entry deathEntry = pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 1];
+                        if (deathEntry != null && deathEntry.type == "Die")
+                        {
+                            Debug.Log("[SR] Recovered kerbal registered as dead. Attempting to repair.");
+                            int flightNum = deathEntry.flight;
+                            pcm.careerLog.Entries.Remove(deathEntry);
+                            FlightLog.Entry landing = new FlightLog.Entry(flightNum, FlightLog.EntryType.Land, Planetarium.fetch.Home.bodyName);
+                            FlightLog.Entry recovery = new FlightLog.Entry(flightNum, FlightLog.EntryType.Recover);
+                            pcm.careerLog.AddEntry(landing);
+                            pcm.careerLog.AddEntry(recovery);
+                        }
+                    }
+                    else if (pcm.careerLog.Entries.Count > 0 && pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 1].type == "Die")
+                    {
+                        Debug.Log("[SR] Squad has been gracious and has only killed " + pcm.name + " once, instead of twice.");
+                        FlightLog.Entry deathEntry = pcm.careerLog.Entries[pcm.careerLog.Entries.Count - 1];
+                        if (deathEntry != null && deathEntry.type == "Die")
+                        {
+                            Debug.Log("[SR] Recovered kerbal registered as dead. Attempting to repair.");
+                            int flightNum = deathEntry.flight;
+                            pcm.careerLog.Entries.Remove(deathEntry);
+                            FlightLog.Entry landing = new FlightLog.Entry(flightNum, FlightLog.EntryType.Land, Planetarium.fetch.Home.bodyName);
+                            FlightLog.Entry recovery = new FlightLog.Entry(flightNum, FlightLog.EntryType.Recover);
+                            pcm.careerLog.AddEntry(landing);
+                            pcm.careerLog.AddEntry(recovery);
+                        }
+                    }
+                    else
+                    {
+                        Debug.Log("[SR] No death entry added, but we'll add a successful recovery anyway.");
+                        pcm.flightLog.AddEntry(FlightLog.EntryType.Land, Planetarium.fetch.Home.bodyName);
+                        pcm.flightLog.AddEntry(FlightLog.EntryType.Recover);
+                        pcm.ArchiveFlightLog();
+                    }
+                }
+            }
+            else if (KerbalsOnboard.Count > 0 && (!Settings.instance.RecoverKerbals || !recovered))
+            {
+                //kill the kerbals instead //Don't kill them twice
+                foreach (ProtoCrewMember pcm in kerbals)
+                {
+                    if (pcm.rosterStatus != ProtoCrewMember.RosterStatus.Dead && pcm.rosterStatus != ProtoCrewMember.RosterStatus.Missing)
+                    {
+                        pcm.rosterStatus = ProtoCrewMember.RosterStatus.Dead;
+                        pcm.Die();
+                    }
+                }
+            }
+
             return kerbals;
         }
 
 
+        public void PreRecoverKerbals()
+        {
+            ProtoVessel pv = vessel.protoVessel;
+            foreach (ProtoCrewMember pcm in pv.GetVesselCrew())
+            {
+                //remove kerbal from vessel
+                ProtoPartSnapshot crewedPart = pv.protoPartSnapshots.Find(p => p.HasCrew(pcm.name));
+                if (crewedPart != null)
+                {
+                    crewedPart.RemoveCrew(pcm.name);
+                    KerbalsOnboard.Add(pcm);
+                    Debug.Log("[SR] Pre-recovered " + pcm.name);
+                }
+                else
+                    Debug.Log("[SR] Can't find the part housing " + pcm.name);
+            }
+        }
 
         //Fires the correct API event
         public void FireEvent()
@@ -893,27 +978,24 @@ namespace StageRecovery
                 //Start adding some in-game display messages about the return
 				msg.AppendLine("<#8BED8B>Stage '" + StageName + "' recovered " + Math.Round(KSCDistance / 1000, 2) + " km from KSC</>");
 
-                for (int i = 0; i < PartsRecovered.Count; i++)
-                {
-					msg.AppendLine(PartsRecovered.Values.ElementAt(i) + " x " + PartsRecovered.Keys.ElementAt(i) + ": <#B4D455>£" + (PartsRecovered.Values.ElementAt(i) * Costs.Values.ElementAt(i) * RecoveryPercent) +"</>");
-                }
-				msg.AppendLine("\n");
+                
+				//msg.AppendLine("\n");
                 //List the percent returned and break it down into distance and speed percentages
 				msg.AppendLine("Recovery percentage: <#8BED8B>" + Math.Round(100 * RecoveryPercent, 1) + "%</>");
 				msg.AppendLine("<#8BED8B>" + Math.Round(100 * DistancePercent, 1) + "%</> distance");
 				msg.AppendLine("<#8BED8B>" + Math.Round(100 * SpeedPercent, 1) + "%</> speed");
 				msg.AppendLine("");
                 //List the total refunds for parts, fuel, and the combined total
+                msg.AppendLine("Total refunds: <#B4D455>£" + FundsReturned + "</>");
 				msg.AppendLine("Total refunded for parts: <#B4D455>£" + DryReturns + "</>");
 				msg.AppendLine("Total refunded for fuel: <#B4D455>£" + FuelReturns + "</>");
-				msg.AppendLine("Total refunds: <#B4D455>£" + FundsReturned + "</>");
-                msg.AppendLine("Total value: <#B4D455>£" + FundsOriginal + "</>");
+                msg.AppendLine("Stage value: <#B4D455>£" + FundsOriginal + "</>");
 
                 if (KerbalsOnboard.Count > 0)
                 {
                     msg.AppendLine("\nKerbals recovered:");
-                    foreach (string kerbal in KerbalsOnboard)
-                        msg.AppendLine("<#E0D503>" + kerbal +"</>");
+                    foreach (ProtoCrewMember kerbal in KerbalsOnboard)
+                        msg.AppendLine("<#E0D503>" + kerbal.name +"</>");
                 }
                 if (ScienceExperiments.Count > 0)
                 {
@@ -937,6 +1019,12 @@ namespace StageRecovery
                     msg.AppendLine("Propulsive landing. Check SR Flight GUI for information about amount of propellant consumed.");
                 }
 
+                msg.AppendLine("\nStage contained the following parts:");
+                for (int i = 0; i < PartsRecovered.Count; i++)
+                {
+                    msg.AppendLine(PartsRecovered.Values.ElementAt(i) + " x " + PartsRecovered.Keys.ElementAt(i) + ": <#B4D455>£" + (PartsRecovered.Values.ElementAt(i) * Costs.Values.ElementAt(i) * RecoveryPercent) + "</>");
+                }
+
                 //Setup and then post the message
                 MessageSystem.Message m = new MessageSystem.Message("Stage Recovered", msg.ToString(), MessageSystemButton.MessageButtonColor.BLUE, MessageSystemButton.ButtonIcons.MESSAGE);
                 MessageSystem.Instance.AddMessage(m);
@@ -944,11 +1032,7 @@ namespace StageRecovery
             else if (!recovered && Settings.instance.ShowFailureMessages)
             {
                 msg.AppendLine("<#FF9900>Stage '" + StageName + "' destroyed " + Math.Round(KSCDistance / 1000, 2) + " km from KSC</>");
-                msg.AppendLine("Stage contains these parts:");
-                for (int i = 0; i < PartsRecovered.Count; i++)
-                {
-                    msg.AppendLine(PartsRecovered.Values.ElementAt(i) + " x " + PartsRecovered.Keys.ElementAt(i));
-                }
+                
                 //If we're career mode (MONEY!) then we also let you know the (why do I say 'we'? It's only me working on this) total cost of the parts
                 if (HighLogic.CurrentGame.Mode == Game.Modes.CAREER)
                 {
@@ -985,6 +1069,12 @@ namespace StageRecovery
                     msg.AppendLine("Attempted propulsive landing but could not find a point of control. Add a pilot or probe core with SAS for propulsive landings.");
                 }
 
+                msg.AppendLine("\nStage contained the following parts:");
+                for (int i = 0; i < PartsRecovered.Count; i++)
+                {
+                    msg.AppendLine(PartsRecovered.Values.ElementAt(i) + " x " + PartsRecovered.Keys.ElementAt(i));
+                }
+
                 //Now we actually create and post the message
                 MessageSystem.Message m = new MessageSystem.Message("Stage Destroyed", msg.ToString(), MessageSystemButton.MessageButtonColor.RED, MessageSystemButton.ButtonIcons.MESSAGE);
                 MessageSystem.Instance.AddMessage(m);
@@ -993,7 +1083,7 @@ namespace StageRecovery
 
         //When using the variable recovery rate we determine the rate from a negative curvature quadratic with y=100 at velocity=lowCut and y=0 at vel=highCut.
         //No other zeroes are in that range. Check this github issue for an example and some more details: https://github.com/magico13/StageRecovery/issues/1
-        public static float GetVariableRecoveryValue(float v)
+        public static double GetVariableRecoveryValue(double v)
         {
             //We're following ax^2+bx+c=recovery
             //We know that -b/2a=LowCut since that's the only location where the derivative of the quadratic is 0 (the max)
