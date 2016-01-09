@@ -456,6 +456,9 @@ namespace StageRecovery
                     totalThrust += e.maxThrust;
                     netISP += (e.maxThrust / e.atmosphereCurve.Evaluate(1));
                 }*/
+
+                Debug.Log("[SR] Controlled and has engines. TWR: "+(totalThrust / (9.81*totalMass)));
+
                 if (totalThrust < (totalMass * 9.81) * Settings.instance.MinTWR) //Need greater than 1 TWR to land. Planes would be different, but we ignore them. This isn't quite true with parachutes, btw.
                     return finalVelocity;
                 //Now we determine the netISP by taking the total thrust and dividing by the stuff we calculated earlier.
@@ -491,6 +494,8 @@ namespace StageRecovery
 
                 double finalMassRequired = totalMass * Math.Exp(-(1.5 * (finalVelocity-cutoff+2)) / (9.81 * netISP));
                 double massRequired = totalMass - finalMassRequired;
+
+                Debug.Log("[SR] Requires " + propsUsed.Count + " fuels. " + String.Join(", ", propsUsed.Keys.ToArray()));
 
                 //If the engine doesn't need fuel (ie, electric engines from firespitter) then we just say you land
                 if (propsUsed.Count == 0)
@@ -536,6 +541,7 @@ namespace StageRecovery
                     //If we don't have enough fuel, we determine how much we CAN use so that maybe we'll land slow enough for a partial refund
                     if (!enoughFuel)
                     {
+                        Debug.Log("[SR] Not enough fuel for full landing. Attempting partial landing.");
                         float limiterAmount = resources.ContainsKey(limitingFuelType) ? (float)resources[limitingFuelType] : 0;
                         float ratio1 = propsUsed[limitingFuelType];
                         foreach (KeyValuePair<string, float> entry in new Dictionary<string, float>(propAmounts))
@@ -577,7 +583,7 @@ namespace StageRecovery
                             }
                     //Calculate the total delta-v expended.
                     double totaldV = netISP * 9.81 * Math.Log(totalMass / (totalMass - massRemoved));
-                    //Divide that by 2.5 and subtract it from the velocity after parachutes.
+                    //Divide that by 1.5 and subtract it from the velocity after parachutes.
                     finalVelocity -= (float)(totaldV / 1.5);
                 }
             }
@@ -596,79 +602,81 @@ namespace StageRecovery
                     .Select(a => a.assembly.GetExportedTypes())
                     .SelectMany(t => t)
                     .FirstOrDefault(t => t.FullName == "DeadlyReentry.ReentryPhysics") != null;*/
-
-            //For 1.0, check if the heating percent is > 0 (later we'll want to scale with that value)
-            bool DeadlyReentryInstalled = HighLogic.CurrentGame.Parameters.Difficulty.ReentryHeatScale > 0;
-
-            //Holder for the chance of burning up in atmosphere (through my non-scientific calculations)
-            float burnChance = 0f;
-            //If DR is installed, the DRMaxVelocity setting is above 0, and the surface speed is above the DRMaxV setting then we calculate the burnChance
-            if (DeadlyReentryInstalled && Settings.instance.DeadlyReentryMaxVelocity > 0 && vessel.srfSpeed > Settings.instance.DeadlyReentryMaxVelocity)
+            try
             {
-                //the burnChance is 2% per 1% that the surface speed is above the DRMaxV
-                burnChance = (float)(2 * ((vessel.srfSpeed / Settings.instance.DeadlyReentryMaxVelocity) - 1));
-                //Log a message alerting us to the speed and the burnChance
-                Debug.Log("[SR] DR velocity exceeded (" + vessel.srfSpeed + "/" + Settings.instance.DeadlyReentryMaxVelocity + ") Chance of burning up: " + burnChance);
-            }
+                //For 1.0, check if the heating percent is > 0 (later we'll want to scale with that value)
+                bool DeadlyReentryInstalled = HighLogic.CurrentGame.Parameters.Difficulty.ReentryHeatScale > 0;
 
-            if (burnChance == 0) return false;
-
-            //Holders for the total amount of ablative shielding available, and the maximum total
-            float totalHeatShield = 0f, maxHeatShield = 0f;
-            foreach (ProtoPartSnapshot p in vessel.protoVessel.protoPartSnapshots)
-            {
-                if (p.modules.Find(mod => mod.moduleName == "ModuleAblator") != null)
+                //Holder for the chance of burning up in atmosphere (through my non-scientific calculations)
+                float burnChance = 0f;
+                //If DR is installed, the DRMaxVelocity setting is above 0, and the surface speed is above the DRMaxV setting then we calculate the burnChance
+                if (DeadlyReentryInstalled && Settings.instance.DeadlyReentryMaxVelocity > 0 && vessel.srfSpeed > Settings.instance.DeadlyReentryMaxVelocity)
                 {
-                    //Grab the heat shield module
-                    ProtoPartModuleSnapshot heatShield = p.modules.First(mod => mod.moduleName == "ModuleAblator");
-                    //Determine what type of shielding is in use
-                   /* String ablativeType = heatShield.moduleValues.GetValue("ablative");
-                    //Hopefully it's AblativeShielding, because that's what we want
-                    if (ablativeType == "AblativeShielding")
-                    {
-                        //Determine the amount of shielding remaining
-                        float shieldRemaining = float.Parse(p.resources.Find(r => r.resourceName == ablativeType).resourceValues.GetValue("amount"));
-                        //And the maximum amount of shielding
-                        float maxShield = float.Parse(p.resources.Find(r => r.resourceName == ablativeType).resourceValues.GetValue("maxAmount"));
-                        //Add those to the totals for the craft
-                        totalHeatShield += shieldRemaining;
-                        maxHeatShield += maxShield;
-                    }
-                    else //Non-ablative shielding. Add a semi-random amount of shielding.
-                    {
-                        //We add 400 to each. This is so there's still a chance of failure
-                        totalHeatShield += 400;
-                        maxHeatShield += 400;
-                    }*/
-
-                    //For stock 1.0
-                    //Determine the amount of shielding remaining
-                    float shieldRemaining = float.Parse(p.resources.Find(r => r.resourceName == "Ablator").resourceValues.GetValue("amount"));
-                    //And the maximum amount of shielding
-                    float maxShield = float.Parse(p.resources.Find(r => r.resourceName == "Ablator").resourceValues.GetValue("maxAmount"));
-                    //Add those to the totals for the craft
-                    totalHeatShield += shieldRemaining;
-                    maxHeatShield += maxShield;
-
+                    //the burnChance is 2% per 1% that the surface speed is above the DRMaxV
+                    burnChance = (float)(2 * ((vessel.srfSpeed / Settings.instance.DeadlyReentryMaxVelocity) - 1));
+                    //Log a message alerting us to the speed and the burnChance
+                    Debug.Log("[SR] DR velocity exceeded (" + vessel.srfSpeed + "/" + Settings.instance.DeadlyReentryMaxVelocity + ") Chance of burning up: " + burnChance);
                 }
+
+                if (burnChance == 0) return false;
+
+                //Holders for the total amount of ablative shielding available, and the maximum total
+                float totalHeatShield = 0f, maxHeatShield = 0f;
+                if (vessel.protoVessel != null)
+                {
+                    foreach (ProtoPartSnapshot p in vessel.protoVessel.protoPartSnapshots)
+                    {
+                        if (p != null && p.modules != null && p.modules.Exists(mod => mod.moduleName == "ModuleAblator"))
+                        {
+                            //Grab the heat shield module
+                            ProtoPartModuleSnapshot heatShield = p.modules.First(mod => mod.moduleName == "ModuleAblator");
+                            
+                            string ablativeRsc = "Ablator";
+                            if (p.partInfo.partPrefab != null && p.partInfo.partPrefab.Modules.Contains("ModuleAblator"))
+                                ablativeRsc = ((ModuleAblator)p.partInfo.partPrefab.Modules["ModuleAblator"]).ablativeResource;
+                           
+                            //For stock 1.0
+                            //Determine the amount of shielding remaining
+                            //Debug.Log("[SR] Looking for resource " + ablativeRsc);
+                            if (p.resources.Exists(r => r.resourceName == ablativeRsc))
+                            {
+                              //  Debug.Log("[SR] Found resource " + ablativeRsc);
+                                float shieldRemaining = float.Parse(p.resources.Find(r => r.resourceName == ablativeRsc).resourceValues.GetValue("amount"));
+                                //And the maximum amount of shielding
+                                float maxShield = float.Parse(p.resources.Find(r => r.resourceName == ablativeRsc).resourceValues.GetValue("maxAmount"));
+                                //Add those to the totals for the craft
+                                totalHeatShield += shieldRemaining;
+                                maxHeatShield += maxShield;
+                            }
+
+                        }
+                    }
+                }
+                Debug.Log("[SR] Found " + totalHeatShield + " ablator remaining with " + maxHeatShield + " total.");
+                //Assume we're not going to burn up until proven that we will
+                bool burnIt = false;
+                //Well, we can't burn up unless the chance of doing so is greater than 0
+                if (burnChance > 0)
+                {
+                    //If there's heatshields on the vessel then reduce the chance by the current total/the max. Aka, up to 100%
+                    if (maxHeatShield > 0)
+                        burnChance -= (totalHeatShield / maxHeatShield);
+                    //Pick a random number between 0 and 1
+                    System.Random rand = new System.Random();
+                    double choice = rand.NextDouble();
+                    //If that's less than or equal to the chance of burning, then we burn (25% chance = 0.25, random must be below 0.25)
+                    burnIt = (choice <= burnChance);
+                    //Once again, more log messages to help with debugging of people's issues
+                    Debug.Log("[SR] Burn chance: " + burnChance + " rand: " + choice + " burning? " + burnIt);
+                }
+                return burnIt;
             }
-            //Assume we're not going to burn up until proven that we will
-            bool burnIt = false;
-            //Well, we can't burn up unless the chance of doing so is greater than 0
-            if (burnChance > 0)
+            catch (Exception e)
             {
-                //If there's heatshields on the vessel then reduce the chance by the current total/the max. Aka, up to 100%
-                if (maxHeatShield > 0)
-                    burnChance -= (totalHeatShield / maxHeatShield);
-                //Pick a random number between 0 and 1
-                System.Random rand = new System.Random();
-                double choice = rand.NextDouble();
-                //If that's less than or equal to the chance of burning, then we burn (25% chance = 0.25, random must be below 0.25)
-                burnIt = (choice <= burnChance);
-                //Once again, more log messages to help with debugging of people's issues
-                Debug.Log("[SR] Burn chance: " + burnChance + " rand: " + choice + " burning? " + burnIt);
+                Debug.Log("[SR] Exception while calculating burn chance. Assuming not burned up.");
+                Debug.LogException(e);
+                return false;
             }
-            return burnIt;
         }
 
         //This calculates and sets the three recovery percentages (Recovery, Distance, and Speed Percents) along with the distance from KSC
