@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using UnityEngine;
 
+
 namespace StageRecovery
 {
     public class EditorGUI
@@ -12,6 +13,7 @@ namespace StageRecovery
         public bool showEditorGUI = false;
         bool highLight = false, tanksDry = true;
         public Rect EditorGUIRect = new Rect(Screen.width / 3, Screen.height / 3, 250, 1);
+
         public void DrawEditorGUI(int windowID)
         {
             GUILayout.BeginVertical();
@@ -127,7 +129,8 @@ namespace StageRecovery
                         //This is where the Reflection starts. We need to access the material library that RealChute has, so we first grab it's Type
                         Type matLibraryType = AssemblyLoader.loadedAssemblies
                             .SelectMany(a => a.assembly.GetExportedTypes())
-                            .SingleOrDefault(t => t.FullName == "RealChute.Libraries.MaterialsLibrary");
+                            .SingleOrDefault(t => t.FullName == "RealChute.Libraries.MaterialsLibrary.MaterialsLibrary");
+
 
                         //We make a list of ConfigNodes containing the parachutes (usually 1, but now there can be any number of them)
                         //We get that from the PPMS 
@@ -142,11 +145,11 @@ namespace StageRecovery
                             //This grabs the method that RealChute uses to get the material. We will invoke that with the name of the material from before.
                             System.Reflection.MethodInfo matMethod = matLibraryType.GetMethod("GetMaterial", new Type[] { mat.GetType() });
                             //In order to invoke the method, we need to grab the active instance of the material library
-                            object MatLibraryInstance = matLibraryType.GetProperty("instance").GetValue(null, null);
+                            object MatLibraryInstance = matLibraryType.GetProperty("Instance").GetValue(null, null);
                             //With the library instance we can invoke the GetMaterial method (passing the name of the material as a parameter) to receive an object that is the material
                             object materialObject = matMethod.Invoke(MatLibraryInstance, new object[] { mat });
                             //With that material object we can extract the dragCoefficient using the helper function above.
-                            float dragC = (float)StageRecovery.GetMemberInfoValue(materialObject.GetType().GetMember("dragCoefficient")[0], materialObject);
+                            float dragC = (float)StageRecovery.GetMemberInfoValue(materialObject.GetType().GetMember("DragCoefficient")[0], materialObject);
                             //Now we calculate the RCParameter. Simple addition of this doesn't result in perfect results for Vt with parachutes with different diameter or drag coefficients
                             //But it works perfectly for mutiple identical parachutes (the normal case)
                             pChutes += dragC * (float)Math.Pow(diameter, 2);
@@ -188,7 +191,6 @@ namespace StageRecovery
             }
 
             ConsolidateStages();
-
             Debug.Log("[SR] Found " + stages.Count + " stages!");
         }
 
@@ -323,17 +325,17 @@ namespace StageRecovery
         {
             double Vt = GetVelocity(dry);
             bool recovered = false;
-            if (Settings.instance.FlatRateModel)
-                recovered = Vt < Settings.instance.CutoffVelocity;
+            if (Settings.Instance.FlatRateModel)
+                recovered = Vt < Settings.Instance.CutoffVelocity;
             else
-                recovered = Vt < Settings.instance.HighCut;
+                recovered = Vt < Settings.Instance.HighCut;
 
             if (!recovered)
                 return 0;
 
             double recoveryPercent = 0;
-            if (recovered && Settings.instance.FlatRateModel) recoveryPercent = 1;
-            else if (recovered && !Settings.instance.FlatRateModel) recoveryPercent = RecoveryItem.GetVariableRecoveryValue(Vt);
+            if (recovered && Settings.Instance.FlatRateModel) recoveryPercent = 1;
+            else if (recovered && !Settings.Instance.FlatRateModel) recoveryPercent = RecoveryItem.GetVariableRecoveryValue(Vt);
 
             return Math.Round(100 * recoveryPercent, 2);
         }
@@ -342,9 +344,9 @@ namespace StageRecovery
         {
             double vel = dry ? EmptyVelocity : FullVelocity;
             UnityEngine.Color stageColor = UnityEngine.Color.red;
-            if (vel < Settings.instance.HighCut)
+            if (vel < Settings.Instance.HighCut)
                 stageColor = UnityEngine.Color.yellow;
-            if (vel < Settings.instance.LowCut)
+            if (vel < Settings.Instance.LowCut)
                 stageColor = UnityEngine.Color.green;
             //Part p = parts[0];
             foreach (Part p in parts)
